@@ -1,18 +1,15 @@
-# group_privater.py (Final Full Code with Session, Privacy, Restore, Username Change Support)
-
 import asyncio
 from datetime import datetime, timedelta
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import UpdateUsernameRequest
 from telethon.tl.types import PeerChannel
-from telethon.tl.functions.account import UpdateUsernameRequest as UserUsernameUpdate
 from config import API_ID, API_HASH
 from db import get_session
 
 scheduled_tasks = {}
 
-async def schedule_group_privacy(user_id, group_username, start_time_str, end_time_str, repeat=False):
+async def schedule_group_privacy(user_id, group_username, start_time_str, end_time_str, repeat=False, bot=None):
     session_string = get_session(user_id)
     if not session_string:
         return "❌ Session not found. Please login first using /start."
@@ -50,11 +47,15 @@ async def schedule_group_privacy(user_id, group_username, start_time_str, end_ti
                 current = await client.get_entity(peer)
                 if current.username:
                     await client(UpdateUsernameRequest(channel=peer, username=""))
-                    print(f"[PRIVATE] Group @{group_username} made private at {datetime.now().strftime('%H:%M:%S')}")
+                    print(f"[PRIVATE] Group @{group_username} made private.")
+                    if bot:
+                        await bot.send_message(user_id, f"✅ Group @{group_username} is now private. Username removed.")
                 else:
                     print("[SKIP] Already private")
             except Exception as e:
                 print(f"[ERROR] Making private failed: {e}")
+                if bot:
+                    await bot.send_message(user_id, f"❌ Failed to make group private: {e}")
 
             await asyncio.sleep(wait_seconds_end - wait_seconds_start)
 
@@ -62,11 +63,15 @@ async def schedule_group_privacy(user_id, group_username, start_time_str, end_ti
                 current = await client.get_entity(peer)
                 if current.username != old_username:
                     await client(UpdateUsernameRequest(channel=peer, username=old_username))
-                    print(f"[PUBLIC] Restored to @{old_username} at {datetime.now().strftime('%H:%M:%S')}")
+                    print(f"[PUBLIC] Restored to @{old_username}")
+                    if bot:
+                        await bot.send_message(user_id, f"🔁 Timer ended. Group is now public with username @{old_username}")
                 else:
                     print("[SKIP] Username already correct")
             except Exception as e:
                 print(f"[ERROR] Restore failed: {e}")
+                if bot:
+                    await bot.send_message(user_id, f"❌ Failed to restore username: {e}")
 
             await client.disconnect()
 
