@@ -1,5 +1,3 @@
-import os
-import logging
 import asyncio
 import random
 from aiogram import types
@@ -7,35 +5,34 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import (
     InputReportReasonSpam, InputReportReasonViolence, InputReportReasonPornography,
     InputReportReasonChildAbuse, InputReportReasonOther
 )
-from db import get_session, get_all_sessions, delete_session_by_string, is_admin
-from config import API_ID, API_HASH, ADMIN_ID
+from db import get_all_sessions, delete_session_by_string, is_admin
+from config import API_ID, API_HASH
 
 class MassReportState(StatesGroup):
     waiting_for_target = State()
-    waiting_for_reasons = State()
 
 reporting_tasks = {}
 target_ids = {}
 selected_reasons = {}
 
-# 🔘 Create inline buttons for selecting reasons
+# Inline buttons for selecting reasons
 def get_reason_buttons(selected):
-    buttons = []
-    all_reasons = ["Spam", "Violence", "Pornography", "Child Abuse", "Other"]
-    for r in all_reasons:
-        text = f"✅ {r}" if r in selected else f"☑️ {r}"
-        buttons.append(types.InlineKeyboardButton(text, callback_data=f"toggle_{r}"))
+    reasons = ["Spam", "Violence", "Pornography", "Child Abuse", "Other"]
+    buttons = [
+        types.InlineKeyboardButton(
+            f"{'✅' if r in selected else '☑️'} {r}", callback_data=f"toggle_{r}"
+        )
+        for r in reasons
+    ]
     buttons.append(types.InlineKeyboardButton("✅ Confirm", callback_data="confirm_reasons"))
     return types.InlineKeyboardMarkup(row_width=2).add(*buttons)
 
 def register_report_handlers(dp):
-
     @dp.message_handler(commands=["start_report"])
     async def start_report(message: types.Message):
         if not is_admin(message.from_user.id):
@@ -77,44 +74,80 @@ def register_report_handlers(dp):
         sessions = get_all_sessions()
         total = len(sessions)
         alive, dead = 0, 0
-        dead_sessions = []
-        active_usernames = []
+        alive_users = []
+        dead_users = []
+        dead_session_strings = []
 
         for uid, session_str in sessions:
             try:
                 client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
                 await client.connect()
                 me = await client.get_me()
-                active_usernames.append(me.username or me.first_name)
+                username = me.username or me.first_name or "No Username"
+                mention = f"@{username}" if me.username else username
+                alive_users.append(f"{uid}: {mention}")
+
                 await client.disconnect()
                 alive += 1
             except:
+                dead_users.append(f"{uid}")
+                dead_session_strings.append(session_str)
                 dead += 1
-                dead_sessions.append(session_str)
 
-        buttons = types.InlineKeyboardMarkup()
-        if dead_sessions:
+        # Buttons
+        buttons = types.InlineKeyboardMarkup(row_width=1)
+        if alive_users:
+            buttons.add(types.InlineKeyboardButton("👤 Show Active Users", callback_data="show_active_users"))
+        if dead_users:
+            buttons.add(types.InlineKeyboardButton("💀 Show Dead Users", callback_data="show_dead_users"))
             buttons.add(types.InlineKeyboardButton("🗑️ Delete Dead Sessions", callback_data="delete_dead"))
-        if active_usernames:
-            buttons.add(types.InlineKeyboardButton("👤 Show Usernames", callback_data="show_usernames"))
 
-        await message.reply(f"📊 Session Report:\n✅ Active: {alive}\n❌ Dead: {dead}\n📦 Total: {total}", reply_markup=buttons)
+        # Store for callback
+        message.bot._alive_users = alive_users
+        message.bot._dead_users = dead_users
+        message.bot._dead_session_strings = dead_session_strings
 
-        @dp.callback_query_handler(lambda call: call.data == "delete_dead")
-        async def delete_dead_sessions(call: types.CallbackQuery):
-            count = 0
-            for session_str in dead_sessions:
-                delete_session_by_string(session_str)
-                count += 1
-            await call.message.edit_text(f"🗑️ Deleted {count} dead sessions.")
-            await call.answer("✅ Cleaned")
+        await message.reply(
+            f"📊 Session Report:\n✅ Active: {alive}\n❌ Dead: {dead}\n📦 Total: {total}",
+            reply_markup=buttons
+        )
 
-        @dp.callback_query_handler(lambda call: call.data == "show_usernames")
-        async def show_usernames_handler(call: types.CallbackQuery):
-            await call.message.answer("👥 Active Usernames:\n" + "\n".join(active_usernames))
-            await call.answer()
+    @dp.callback_query_handler(lambda call: call.data in ["show_active_users", "show_dead_users", "delete_dead"])
+    async def handle_session_buttons(call: types.CallbackQuery):
+        if call.data == "show_active_users":
+            users = getattr(call.bot, "_alive_users", [])
+            await call.message.answer("👤 Active Users:\n" + "\n".join(users or ["None"]))
+        elif call.data == "show_dead_users":
+            users = getattr(call.bot, "_dead_users", [])
+            await call.message.answer("💀 Dead Users:\n" + "\n".join(users or ["None"]))
+        elif call.data == "delete_dead":
+            dead_sessions = getattr(call.bot, "_dead_session_strings", [])
+            for session in dead_sessions:
+                delete_session_by_string(session)
+            await call.message.answer(f"🗑️ Deleted {len(dead_sessions)} dead sessions.")
+        await call.answer()
 
+def register_stop_handler(dp):
+    @dp.message_handler(commands=["stop_report"])
+    async def stop_report(message: types.Message):
+        user_id = message.from_user.id
+        if not is_admin(user_id):
+            return await message.reply("❌ Only admins can stop reporting.")
 
+        if user_id in reporting_tasks:
+            for client, task in reporting_tasks[user_id]:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                await client.disconnect()
+            reporting_tasks.pop(user_id)
+            await message.answer("🛑 Reporting stopped.")
+        else:
+            await message.answer("⚠️ No active reporting.")
+
+# Core logic for reporting
 async def start_mass_report(user_id, target, reasons, bot):
     reason_objs = {
         "Spam": InputReportReasonSpam(),
@@ -141,7 +174,6 @@ async def start_mass_report(user_id, target, reasons, bot):
         except Exception as e:
             await bot.send_message(user_id, f"❌ Error in session: {e}")
 
-
 async def report_loop(client, target_id, reasons, user, reason_objs, bot, user_id):
     while True:
         reason = random.choice(reasons)
@@ -151,24 +183,3 @@ async def report_loop(client, target_id, reasons, user, reason_objs, bot, user_i
         except Exception as e:
             await bot.send_message(user_id, f"❌ Error by {user}: {str(e)}")
         await asyncio.sleep(random.randint(0, 60))
-
-# Stop handler
-def register_stop_handler(dp):
-    @dp.message_handler(commands=["stop_report"])
-    async def stop_report(message: types.Message):
-        user_id = message.from_user.id
-        if not is_admin(user_id):
-            return await message.reply("❌ Only admins can stop reporting.")
-
-        if user_id in reporting_tasks:
-            for client, task in reporting_tasks[user_id]:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                await client.disconnect()
-            reporting_tasks.pop(user_id)
-            await message.answer("🛑 Reporting stopped.")
-        else:
-            await message.answer("⚠️ No active reporting.")
