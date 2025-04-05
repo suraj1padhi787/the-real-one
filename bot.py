@@ -101,7 +101,7 @@ from db import get_session
 async def start_cmd(msg: types.Message, state: FSMContext):
     existing_session = get_session(msg.from_user.id)
     if existing_session:
-        await msg.answer("✅ You're already logged in. Session is active.       /start_change for username chnge and use /private for private your group for a time interval")
+        await msg.answer("✅ You're already logged in. Session is active.       /start_change for automatically change username ")
         return
     await msg.answer("👋 Welcome to ProBot!\n\nPlease enter your **API ID**:")
     await LoginState.waiting_for_api_id.set()
@@ -109,7 +109,7 @@ async def start_cmd(msg: types.Message, state: FSMContext):
 async def start_cmd(msg: types.Message, state: FSMContext):
     existing_session = get_session(msg.from_user.id)
     if existing_session:
-        await msg.answer("✅ You're already logged in. Session is active.             /start_change for username chnge and use /private for private your group for a time interval ")
+        await msg.answer("✅ You're already logged in. Session is active.             /start_change for automatically change username ")
         return  # Skip login process
 
     await msg.answer("👋 Welcome to ProBot!\n\nPlease enter your **API ID**:")
@@ -128,7 +128,7 @@ async def get_api_id(msg: types.Message, state: FSMContext):
 @dp.message_handler(state=LoginState.waiting_for_api_hash)
 async def get_api_hash(msg: types.Message, state: FSMContext):
     await state.update_data(api_hash=msg.text.strip())
-    await msg.answer("📱 Now enter your **phone number** with country code:\nExample: `+919876543210`")
+    await msg.answer("📱 Now enter your **phone number** with country code:\nExample: `+91**********`")
     await LoginState.waiting_for_phone.set()
 
 @dp.message_handler(state=LoginState.waiting_for_phone)
@@ -184,7 +184,7 @@ async def get_2fa_password(msg: types.Message, state: FSMContext):
     await msg.answer("🔐 Verifying 2FA password...")
     result = await confirm_2fa_password(user_id, password, state, bot)
     if result:
-        await msg.answer("✅ 2FA Verified & Session Saved!             /start_change for username chnge and use /private for private your group for a time interval")
+        await msg.answer("✅ 2FA Verified & Session Saved!             /start_change for automatically change username")
     else:
         await msg.answer("❌ Incorrect password or error occurred.")
 
@@ -196,7 +196,7 @@ async def start_changing_username(msg: types.Message, state: FSMContext):
 @dp.message_handler(state="group_username")
 async def get_group_username(msg: types.Message, state: FSMContext):
     await state.update_data(group_username=msg.text.strip())
-    await msg.reply("✏️ Now send the list of usernames to rotate, separated by commas:")
+    await msg.reply("✏️ Now send the list of usernames to rotate, separated by commas: eg - username1,username2,username3...  no space ")
     await state.set_state("usernames_list")
 
 @dp.message_handler(state="usernames_list")
