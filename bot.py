@@ -279,12 +279,14 @@ async def private_repeat_decision(callback: types.CallbackQuery, state: FSMConte
     repeat = callback.data == "repeat_yes"
     data = await state.get_data()
     result = await schedule_group_privacy(
-        user_id=callback.from_user.id,
-        group_username=data['group'],
-        start_time_str=data['start'],
-        end_time_str=data['end'],
-        repeat=repeat
-    )
+    user_id=callback.from_user.id,
+    group_username=data['group'],
+    start_time_str=data['start'],
+    end_time_str=data['end'],
+    repeat=repeat,
+    bot=callback.bot
+)
+
     await callback.message.edit_text(result)
     await callback.answer("✅ Scheduled")
     await state.finish()
