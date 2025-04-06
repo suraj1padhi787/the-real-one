@@ -1,8 +1,5 @@
 import sqlite3
-from config import DB_PATH
-
-from config import DB_PATH, ADMIN_ID  # ✅ ADMIN_ID added here
-
+from config import DB_PATH, ADMIN_ID
 
 # 🔧 Initialize DB (run once at startup)
 def init_db():
@@ -13,6 +10,19 @@ def init_db():
             user_id INTEGER,
             session_string TEXT,
             created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS proxies (
+            user_id INTEGER,
+            proxy_type TEXT,
+            ip TEXT,
+            port INTEGER
         )
     """)
     conn.commit()
@@ -43,6 +53,7 @@ def get_all_sessions():
     rows = c.fetchall()
     conn.close()
     return rows
+
 # ❌ Delete session by string (used to remove dead sessions)
 def delete_session_by_string(session_string):
     conn = sqlite3.connect(DB_PATH)
@@ -50,14 +61,21 @@ def delete_session_by_string(session_string):
     c.execute("DELETE FROM sessions WHERE session_string = ?", (session_string,))
     conn.commit()
     conn.close()
+
+def delete_session_by_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    conn.commit()
+    rows_affected = c.rowcount
+    conn.close()
+    return rows_affected > 0
+
+# 👑 Admins
 def init_admins():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            user_id INTEGER PRIMARY KEY
-        )
-    """)
+    c.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
     conn.commit()
     conn.close()
 
@@ -85,11 +103,21 @@ def get_all_admins():
 
 def is_admin(user_id):
     return user_id == ADMIN_ID or user_id in get_all_admins()
-def delete_session_by_user(user_id):
+
+# 🔐 Proxies
+def save_user_proxies(user_id, proxy_list):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    c.execute("DELETE FROM proxies WHERE user_id = ?", (user_id,))
+    c.executemany("INSERT INTO proxies (user_id, proxy_type, ip, port) VALUES (?, ?, ?, ?)",
+                  [(user_id, t, ip, port) for t, ip, port in proxy_list])
     conn.commit()
-    rows_affected = c.rowcount
     conn.close()
-    return rows_affected > 0
+
+def get_user_proxies(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT proxy_type, ip, port FROM proxies WHERE user_id = ?", (user_id,))
+    proxies = c.fetchall()
+    conn.close()
+    return [(t, ip, port) for t, ip, port in proxies]
