@@ -105,9 +105,6 @@ async def handle_admins(message: types.Message):
     text = "👑 Current Admins:\n" + "\n".join(str(a) for a in admins)
     await message.reply(text)
 
-
-
-# ✅ Sahi:
 from db import get_session
 
 @dp.message_handler(commands=['start'])
