@@ -11,18 +11,13 @@ from telethon.tl.types import (
     InputReportReasonSpam, InputReportReasonViolence, InputReportReasonPornography,
     InputReportReasonChildAbuse, InputReportReasonOther
 )
-from db import get_all_sessions, delete_session_by_string, is_admin, save_user_proxies, get_user_proxies
+from db import get_all_sessions, delete_session_by_string, is_admin
 from config import API_ID, API_HASH, ADMIN_ID
 
 reporting_tasks = {}
 targets = {}
 selected_reasons = {}
 joined_once = set()
-report_stats = {}  # user_id: {sent: int, dead: int, total: int}
-report_message_id = {}  # user_id: message_id of live report panel
-
-class ProxyState(StatesGroup):
-    waiting_for_proxy = State()
 
 class ReportStates(StatesGroup):
     waiting_for_target = State()
@@ -43,47 +38,11 @@ def get_reason_buttons(selected):
     buttons.append(types.InlineKeyboardButton("🚀 Confirm", callback_data="confirm"))
     return types.InlineKeyboardMarkup(row_width=2).add(*buttons)
 
-def update_stats_panel(user_id, bot):
-    async def _update():
-        if user_id not in report_stats or user_id not in report_message_id:
-            return
-        stats = report_stats[user_id]
-        text = f"📊 *Live Report Stats*\n\n"
-        text += f"📤 Sent Reports: `{stats.get('sent', 0)}`\n"
-        text += f"💀 Dead Sessions: `{stats.get('dead', 0)}`\n"
-        text += f"🧾 Total Sessions: `{stats.get('total', 0)}`"
-        try:
-            await bot.edit_message_text(chat_id=user_id, message_id=report_message_id[user_id], text=text, parse_mode="Markdown")
-        except:
-            pass
-    return _update()
-
 def register_report_handlers(dp):
-    @dp.message_handler(commands=["add_proxy"])
-    async def add_proxy_cmd(message: types.Message):
-        if not is_admin(message.from_user.id):
-            return await message.reply("❌ Only admins can add proxies.")
-        await message.reply("📡 Send proxies in format: type,ip,port\nExample:\nsocks5,1.2.3.4,1080")
-        await ProxyState.waiting_for_proxy.set()
-
-    @dp.message_handler(state=ProxyState.waiting_for_proxy)
-    async def save_proxy_input(message: types.Message, state: FSMContext):
-        lines = message.text.strip().split("\n")
-        proxies = []
-        for line in lines:
-            try:
-                t, ip, port = line.strip().split(",")
-                proxies.append((t.strip(), ip.strip(), int(port.strip())))
-            except:
-                continue
-        save_user_proxies(message.from_user.id, proxies)
-        await message.reply(f"✅ Saved {len(proxies)} proxies.")
-        await state.finish()
-
     @dp.message_handler(commands=["start_report"])
     async def start_report_cmd(message: types.Message):
         if not is_admin(message.from_user.id):
-            return await message.reply("❌ Only admins can use this.")
+            return await message.reply("❌ Only admins can use this command.")
         await message.reply("🎯 Send the @username or ID of the group/user to report:")
         await ReportStates.waiting_for_target.set()
 
@@ -104,9 +63,6 @@ def register_report_handlers(dp):
             reasons = list(selected_reasons[user_id])
             if not reasons:
                 return await call.answer("⚠️ Select at least one reason")
-            stats_text = "📊 *Live Report Stats*\n\n📤 Sent Reports: `0`\n💀 Dead Sessions: `0`\n🧾 Total Sessions: `...`"
-            msg = await call.message.answer(stats_text, parse_mode="Markdown")
-            report_message_id[user_id] = msg.message_id
             await call.message.edit_text("🚀 Report started!")
             await start_mass_report(user_id, targets[user_id], reasons, call.bot)
             return await call.answer()
@@ -124,8 +80,9 @@ def register_stop_handler(dp):
     async def stop_report_cmd(message: types.Message):
         user_id = message.from_user.id
         if not is_admin(user_id):
-            return await message.reply("❌ Only admins can stop reports.")
-        if user_id in reporting_tasks:
+            return await message.reply("❌ Only admins can stop reporting.")
+
+        if user_id in reporting_tasks and reporting_tasks[user_id]:
             for client, task in reporting_tasks[user_id]:
                 task.cancel()
                 try:
@@ -134,48 +91,9 @@ def register_stop_handler(dp):
                     pass
                 await client.disconnect()
             reporting_tasks.pop(user_id)
-            await message.reply("🛑 Report stopped.")
+            await message.reply("🛑 Reporting stopped.")
         else:
             await message.reply("⚠️ No active reporting found.")
-
-    @dp.message_handler(commands=["check_sessions"])
-    async def check_sessions(message: types.Message):
-        if not is_admin(message.from_user.id):
-            return await message.reply("❌ Only admins can use this.")
-        sessions = get_all_sessions()
-        alive, dead = [], []
-        for uid, sess in sessions:
-            try:
-                client = TelegramClient(StringSession(sess), API_ID, API_HASH)
-                await client.connect()
-                user = await client.get_me()
-                name = user.username or user.first_name or user.phone
-                link = f"[{name}](https://t.me/{user.username})" if user.username else name
-                alive.append(link)
-                await client.disconnect()
-            except:
-                delete_session_by_string(sess)
-                dead.append(str(uid))
-        reply = f"✅ Alive: {len(alive)}\n" + "\n".join(alive)
-        if dead:
-            reply += f"\n\n💀 Dead: {len(dead)}\n" + "\n".join(dead)
-        await message.reply(reply, parse_mode="Markdown")
-
-    @dp.message_handler(commands=["status_report"])
-    async def status_report(message: types.Message):
-        user_id = message.from_user.id
-        if not is_admin(user_id):
-            return await message.reply("❌ Only admins can use this.")
-        stats = report_stats.get(user_id)
-        if not stats:
-            return await message.reply("ℹ️ No active report found.")
-        text = (
-            "📊 *Live Report Stats*\n\n"
-            f"📤 Sent Reports: `{stats.get('sent', 0)}`\n"
-            f"💀 Dead Sessions: `{stats.get('dead', 0)}`\n"
-            f"🧾 Total Sessions: `{stats.get('total', 0)}`"
-        )
-        await message.reply(text, parse_mode="Markdown")
 
 async def start_mass_report(user_id, target, reasons, bot):
     sessions = get_all_sessions()
@@ -183,12 +101,9 @@ async def start_mass_report(user_id, target, reasons, bot):
         await bot.send_message(user_id, "❌ No sessions available.")
         return
 
-    proxies = get_user_proxies(user_id)
-    report_stats[user_id] = {"sent": 0, "dead": 0, "total": len(sessions)}
-    for idx, (uid, session_str) in enumerate(sessions):
+    for uid, session_str in sessions:
         try:
-            proxy = proxies[idx % len(proxies)] if proxies else None
-            client = TelegramClient(StringSession(session_str), API_ID, API_HASH, proxy=proxy) if proxy else TelegramClient(StringSession(session_str), API_ID, API_HASH)
+            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
             await client.start()
             me = await client.get_me()
             uname = me.username or me.first_name or str(uid)
@@ -201,12 +116,17 @@ async def start_mass_report(user_id, target, reasons, bot):
                     await client(ReportPeerRequest(peer=entity, reason=random.choice([reasons_map[r] for r in reasons]), message="Reported"))
                     await asyncio.sleep(2)
                     await client(LeaveChannelRequest(entity))
-                    await bot.send_message(user_id, f"✅ {uname} joined, reported & left.")
+                    await bot.send_message(user_id, f"✅ {uname} joined, reported & left {target}")
                     joined_once.add(session_str)
+
+                    # ✅ Start report loop even after leave
+                    task = asyncio.create_task(report_loop(client, target, user_id, uname, reasons, session_str, bot))
+                    if user_id not in reporting_tasks:
+                        reporting_tasks[user_id] = []
+                    reporting_tasks[user_id].append((client, task))
+                    continue
                 except Exception as e:
                     await bot.send_message(user_id, f"⚠️ {uname} couldn't join: {e}")
-            else:
-                await bot.send_message(user_id, f"⚠️ {uname} already joined. Skipping join.")
 
             task = asyncio.create_task(report_loop(client, target, user_id, uname, reasons, session_str, bot))
             if user_id not in reporting_tasks:
@@ -215,9 +135,7 @@ async def start_mass_report(user_id, target, reasons, bot):
 
         except Exception as e:
             delete_session_by_string(session_str)
-            report_stats[user_id]["dead"] += 1
-            await update_stats_panel(user_id, bot)
-            await bot.send_message(ADMIN_ID, f"❌ Session {uid} deleted: {e}")
+            await bot.send_message(ADMIN_ID, f"❌ Session {uid} deleted due to error: {e}")
 
 async def report_loop(client, target, user_id, uname, reasons, session_str, bot):
     try:
@@ -226,18 +144,12 @@ async def report_loop(client, target, user_id, uname, reasons, session_str, bot)
             try:
                 entity = await client.get_entity(target)
                 await client(ReportPeerRequest(peer=entity, reason=reasons_map[reason], message="Reported"))
-                report_stats[user_id]["sent"] += 1
-                await update_stats_panel(user_id, bot)
                 await bot.send_message(user_id, f"📣 {uname} reported with {reason}")
             except Exception as e:
                 delete_session_by_string(session_str)
-                report_stats[user_id]["dead"] += 1
-                await update_stats_panel(user_id, bot)
-                await bot.send_message(ADMIN_ID, f"⚠️ {uname} removed from system: {e}")
+                await bot.send_message(ADMIN_ID, f"⚠️ {uname} removed during loop: {e}")
                 break
-            await asyncio.sleep(random.randint(3, 7))
+            await asyncio.sleep(random.randint(3, 7))  # Fast reporting interval
     except Exception as e:
         delete_session_by_string(session_str)
-        report_stats[user_id]["dead"] += 1
-        await update_stats_panel(user_id, bot)
-        await bot.send_message(ADMIN_ID, f"❌ {uname} crashed: {e}")
+        await bot.send_message(ADMIN_ID, f"❌ {uname} crashed and removed: {e}")
