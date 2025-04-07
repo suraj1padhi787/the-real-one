@@ -7,7 +7,7 @@ dp = Dispatcher(bot)
 
 
 from aiogram import Bot, Dispatcher, types
-from report_module import register_report_handlers, register_stop_handler
+#from report_module import register_report_handlers, register_stop_handler
 register_report_handlers(dp)
 register_stop_handler(dp)
 
